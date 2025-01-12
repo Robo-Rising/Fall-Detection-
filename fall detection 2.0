@@ -1,0 +1,101 @@
+#define BLYNK_TEMPLATE_ID "TMPL6j1fvU1Vy"
+#define BLYNK_TEMPLATE_NAME "Iot Based Fall Detection"
+#define BLYNK_AUTH_TOKEN "gAtzl_ydl_tm8diyJOgq8SqTmX5tuCE4"
+
+#define BLYNK_PRINT Serial
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Wire.h>
+
+Adafruit_MPU6050 mpu;
+
+char ssid[] = "abcd";
+char pass[] = "12345678";
+BlynkTimer timer;
+
+// Thresholds for detecting a fall
+const float FALL_ACCEL_THRESHOLD = 2.5;  // Acceleration threshold in g
+const float LOW_ACCEL_THRESHOLD = 0.5;  // Low acceleration threshold after impact
+const int FALL_DETECTION_WINDOW = 500;  // Time window in milliseconds for fall detection
+
+bool fallDetected = false;
+unsigned long fallStartTime = 0;
+
+void setup()
+{
+  Serial.begin(921600);
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+  while (!Serial)
+    delay(10); // Wait for serial console to open
+
+  Serial.println("Adafruit MPU6050 test!");
+
+  // Initialize the MPU6050
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {
+      delay(10);
+    }
+  }
+
+  Serial.println("MPU6050 Found!");
+
+  // Configure motion detection
+  mpu.setHighPassFilter(MPU6050_HIGHPASS_0_63_HZ);
+
+  Serial.println("Setup complete");
+  delay(100);
+
+  timer.setInterval(100L, checkFall);
+}
+
+void loop()
+{
+  Blynk.run();
+  timer.run();
+}
+
+void checkFall()
+{
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  float totalAccel = sqrt(a.acceleration.x * a.acceleration.x +
+                          a.acceleration.y * a.acceleration.y +
+                          a.acceleration.z * a.acceleration.z);
+
+  Serial.print("Total Acceleration: ");
+  Serial.println(totalAccel);
+
+  if (totalAccel > FALL_ACCEL_THRESHOLD && !fallDetected) {
+    // Potential fall detected
+    fallDetected = true;
+    fallStartTime = millis();
+    Serial.println("Potential fall detected!");
+  }
+
+  if (fallDetected) {
+    if (totalAccel < LOW_ACCEL_THRESHOLD) {
+      // Confirmed fall (low acceleration after impact)
+      Serial.println("Fall confirmed!");
+      Blynk.logEvent("fall_detected", "Fall Detected!");
+      fallDetected = false; // Reset detection state
+    } else if (millis() - fallStartTime > FALL_DETECTION_WINDOW) {
+      // Fall detection timeout, reset state
+      Serial.println("Fall detection timeout");
+      fallDetected = false;
+    }
+  }
+
+  // Send sensor values to Blynk (for monitoring purposes)
+  Blynk.virtualWrite(V0, a.acceleration.x);
+  Blynk.virtualWrite(V1, a.acceleration.y);
+  Blynk.virtualWrite(V2, a.acceleration.z);
+  Blynk.virtualWrite(V3, g.gyro.x);
+  Blynk.virtualWrite(V4, g.gyro.y);
+  Blynk.virtualWrite(V5, g.gyro.z);
+}
