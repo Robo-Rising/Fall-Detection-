@@ -1,0 +1,121 @@
+#define BLYNK_TEMPLATE_ID "TMPL6j1fvU1Vy"
+#define BLYNK_TEMPLATE_NAME "Iot Based Fall Detection"
+#define BLYNK_AUTH_TOKEN "gAtzl_ydl_tm8diyJOgq8SqTmX5tuCE4"
+
+#define BLYNK_PRINT Serial
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Wire.h>
+#include <math.h>
+
+Adafruit_MPU6050 mpu;
+
+char ssid[] = "abcd";
+char pass[] = "12345678";
+BlynkTimer timer;
+
+// Thresholds for fall detection
+const float ACCEL_SPIKE_THRESHOLD = 2.5;  // Acceleration threshold (in g) for impact
+const float LOW_ACCEL_THRESHOLD = 0.5;   // Low acceleration threshold after impact
+const float GYRO_CHANGE_THRESHOLD = 50; // Gyroscope change threshold (in degrees/second)
+
+// Time thresholds (in ms)
+const int FALL_CONFIRM_WINDOW = 1000;    // Time window to validate a fall
+const int STILL_PHASE_MIN_TIME = 500;    // Minimum still phase duration to confirm a fall
+
+bool potentialFall = false;
+unsigned long fallStartTime = 0;
+unsigned long stillStartTime = 0;
+
+void setup() {
+  Serial.begin(921600);
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+  while (!Serial)
+    delay(10); // Wait for serial console to open
+
+  Serial.println("Adafruit MPU6050 test!");
+
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {
+      delay(10);
+    }
+  }
+
+  Serial.println("MPU6050 Found!");
+
+  delay(100);
+  timer.setInterval(100L, checkFall);
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+}
+
+void checkFall() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  // Calculate total acceleration
+  float totalAccel = sqrt(a.acceleration.x * a.acceleration.x +
+                          a.acceleration.y * a.acceleration.y +
+                          a.acceleration.z * a.acceleration.z);
+
+  // Calculate gyro magnitude
+  float totalGyro = sqrt(g.gyro.x * g.gyro.x +
+                         g.gyro.y * g.gyro.y +
+                         g.gyro.z * g.gyro.z);
+
+  Serial.print("Total Acceleration: ");
+  Serial.print(totalAccel);
+  Serial.print(" | Total Gyro: ");
+  Serial.println(totalGyro);
+
+  // Step 1: Detect sudden acceleration spike (impact phase)
+  if (totalAccel > ACCEL_SPIKE_THRESHOLD && !potentialFall) {
+    potentialFall = true;
+    fallStartTime = millis();
+    Serial.println("Potential fall detected! Monitoring...");
+  }
+
+  // Step 2: Confirm fall by checking for low acceleration (still phase)
+  if (potentialFall) {
+    if (totalAccel < LOW_ACCEL_THRESHOLD) {
+      if (stillStartTime == 0) {
+        stillStartTime = millis(); // Start still phase timer
+      }
+
+      // If still phase lasts long enough, confirm the fall
+      if (millis() - stillStartTime > STILL_PHASE_MIN_TIME) {
+        Serial.println("Fall confirmed!");
+        Blynk.logEvent("fall_detected", "Fall Detected!");
+        potentialFall = false;   // Reset state
+        stillStartTime = 0;      // Reset still phase timer
+        return;
+      }
+    } else {
+      // Reset still phase timer if low acceleration condition is broken
+      stillStartTime = 0;
+    }
+
+    // Step 3: Cancel fall detection if validation time exceeds limit
+    if (millis() - fallStartTime > FALL_CONFIRM_WINDOW) {
+      Serial.println("Fall detection cancelled (false alarm).");
+      potentialFall = false; // Reset state
+      stillStartTime = 0;
+    }
+  }
+
+  // Send sensor data to Blynk for monitoring
+  Blynk.virtualWrite(V0, a.acceleration.x);
+  Blynk.virtualWrite(V1, a.acceleration.y);
+  Blynk.virtualWrite(V2, a.acceleration.z);
+  Blynk.virtualWrite(V3, g.gyro.x);
+  Blynk.virtualWrite(V4, g.gyro.y);
+  Blynk.virtualWrite(V5, g.gyro.z);
+}
